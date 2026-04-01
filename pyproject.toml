@@ -1,0 +1,9 @@
+[project]
+name = "comfyui-heygen-av4"
+version = "1.0.0"
+description = "ComfyUI custom node for HeyGen Avatar IV (AV4) video generation"
+license = { text = "MIT" }
+dependencies = ["requests", "Pillow", "numpy", "torch"]
+
+[project.urls]
+Repository = "https://github.com/PauldeLavallaz/comfyui-heygen-av4"
