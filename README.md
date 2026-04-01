@@ -6,8 +6,7 @@ Upload a portrait photo + audio clip and get back a lifelike AI video with natur
 
 ## Features
 
-- **Audio mode** -- Connect a `Load Audio` node to drive the avatar with your own voice recording
-- **TTS mode** -- Provide a script and voice ID to use HeyGen's text-to-speech
+- **Image + Audio in, Video out** -- Connect `Load Image` + `Load Audio`, get a lip-synced video
 - **Avatar IV motion prompts** -- Guide gestures and expressions with natural language
 - **Automatic polling** -- The node waits for the video to render and returns it ready for `Save Video`
 - **Fallback endpoint** -- If the AV4 endpoint fails, automatically falls back to HeyGen's v2 Studio API
@@ -43,13 +42,8 @@ Download this repository and place the `comfyui-heygen-av4` folder inside `Comfy
 |-------|------|----------|-------------|
 | `api_key` | STRING | Yes | Your HeyGen API key |
 | `image` | IMAGE | Yes | Portrait photo (from Load Image) |
+| `audio` | AUDIO | Yes | Audio clip (from Load Audio) |
 | `video_title` | STRING | Yes | Title for the generated video |
-| `audio` | AUDIO | No | Pre-recorded audio (from Load Audio). When connected, TTS fields are ignored |
-| `script` | STRING | No | Text for TTS mode (used only when audio is NOT connected) |
-| `voice_id` | STRING | No | HeyGen voice ID for TTS |
-| `speed` | FLOAT | No | TTS speech speed (0.5-1.5, default 1.0) |
-| `pitch` | INT | No | TTS pitch adjustment (-50 to 50, default 0) |
-| `emotion` | COMBO | No | TTS voice emotion (Friendly, Serious, Soothing, Excited, Cheerful, Broadcaster) |
 | `custom_motion_prompt` | STRING | No | Motion instructions for avatar gestures and expressions |
 | `enhance_custom_motion_prompt` | BOOLEAN | No | Let HeyGen AI enhance the motion prompt (default: true) |
 | `width` | INT | No | Output video width (default: 1920) |
@@ -70,21 +64,10 @@ Download this repository and place the `comfyui-heygen-av4` folder inside `Comfy
 
 ## Usage
 
-### Audio Mode (recommended)
-
 ```
 Load Image --> [image]
 Load Audio --> [audio]   --> HeyGen Avatar IV (AV4) --> [video] --> Save Video
                              api_key: "your-key"
-```
-
-### TTS Mode
-
-```
-Load Image --> [image]   --> HeyGen Avatar IV (AV4) --> [video] --> Save Video
-                             api_key: "your-key"
-                             script: "Hello, welcome!"
-                             voice_id: "your-voice-id"
 ```
 
 ## How It Works
@@ -94,15 +77,6 @@ Load Image --> [image]   --> HeyGen Avatar IV (AV4) --> [video] --> Save Video
 3. Calls the Avatar IV generation endpoint with your parameters
 4. Polls the status endpoint until the video is ready
 5. Downloads the video and returns it as a ComfyUI VIDEO type
-
-## Getting a Voice ID
-
-Use the [HeyGen List Voices API](https://docs.heygen.com/reference/list-voices-v2) to find available voice IDs:
-
-```bash
-curl -X GET "https://api.heygen.com/v2/voices" \
-  -H "X-Api-Key: YOUR_API_KEY"
-```
 
 ## License
 
