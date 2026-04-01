@@ -2,10 +2,23 @@
 ComfyUI node: HeyGen Avatar IV (AV4)
 Generates realistic talking-head videos using HeyGen's Avatar IV API.
 Takes a portrait image + audio file and produces a lip-synced video.
+Automatically detects the image aspect ratio for the output video.
 """
 
 from .media_utils import image_tensor_to_png_bytes, audio_tensor_to_uploadable, _make_video_output
 from .heygen_api import upload_asset, generate_av4, generate_v2, poll_video_status, download_video
+
+
+def _get_image_dimensions(image_tensor) -> tuple:
+    """Extract (width, height) from IMAGE tensor [B, H, W, 3] and round to even."""
+    if image_tensor.ndim == 4:
+        h, w = image_tensor.shape[1], image_tensor.shape[2]
+    else:
+        h, w = image_tensor.shape[0], image_tensor.shape[1]
+    # Round to nearest even number (required by most video codecs)
+    w = w if w % 2 == 0 else w + 1
+    h = h if h % 2 == 0 else h + 1
+    return int(w), int(h)
 
 
 class HeyGenAvatarIV:
@@ -20,6 +33,7 @@ class HeyGenAvatarIV:
             },
             "optional": {
                 "custom_motion_prompt": ("STRING", {"multiline": True, "default": ""}),
+                "enhance_custom_motion_prompt": ("BOOLEAN", {"default": True}),
             },
         }
 
@@ -35,9 +49,14 @@ class HeyGenAvatarIV:
         image,
         audio,
         custom_motion_prompt: str = "",
+        enhance_custom_motion_prompt: bool = True,
     ):
         if not api_key.strip():
             raise ValueError("[HeyGen] api_key is required")
+
+        # ── Detect image dimensions ──────────────────────────────────────────
+        img_w, img_h = _get_image_dimensions(image)
+        print(f"[HeyGen] Image dimensions: {img_w}x{img_h}")
 
         # ── 1. Upload image ──────────────────────────────────────────────────
         print("[HeyGen] Converting and uploading image...")
@@ -64,10 +83,11 @@ class HeyGenAvatarIV:
             "image_key": image_key,
             "video_title": "ComfyUI AV4",
             "audio_asset_id": audio_asset_id,
+            "dimension": {"width": img_w, "height": img_h},
         }
         if custom_motion_prompt.strip():
             av4_params["custom_motion_prompt"] = custom_motion_prompt
-            av4_params["enhance_custom_motion_prompt"] = True
+            av4_params["enhance_custom_motion_prompt"] = enhance_custom_motion_prompt
 
         try:
             video_id = generate_av4(api_key, av4_params)
@@ -83,11 +103,11 @@ class HeyGenAvatarIV:
                 image_asset_id=image_asset_id,
                 image_url=image_url,
                 voice_config=voice_config,
-                dimension={"width": 1920, "height": 1080},
+                dimension={"width": img_w, "height": img_h},
                 title="ComfyUI AV4",
                 background=None,
                 avatar_iv_motion_prompt=custom_motion_prompt,
-                enhance_motion_prompt=True,
+                enhance_motion_prompt=enhance_custom_motion_prompt,
             )
 
         # ── 4. Poll for completion ───────────────────────────────────────────
