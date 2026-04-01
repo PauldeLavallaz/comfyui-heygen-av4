@@ -8,10 +8,6 @@ from .media_utils import image_tensor_to_png_bytes, audio_tensor_to_uploadable, 
 from .heygen_api import upload_asset, generate_av4, generate_v2, poll_video_status, download_video
 
 
-ENDPOINT_MODES = ["av4_with_fallback", "av4_only", "v2_only"]
-BACKGROUND_TYPES = ["transparent", "color"]
-
-
 class HeyGenAvatarIV:
 
     @classmethod
@@ -21,27 +17,9 @@ class HeyGenAvatarIV:
                 "api_key": ("STRING", {"multiline": False, "default": ""}),
                 "image": ("IMAGE",),
                 "audio": ("AUDIO",),
-                "video_title": ("STRING", {"multiline": False, "default": "ComfyUI AV4 Video"}),
             },
             "optional": {
-                # Avatar IV motion control
                 "custom_motion_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "enhance_custom_motion_prompt": ("BOOLEAN", {"default": True}),
-
-                # Video dimensions
-                "width": ("INT", {"default": 1920, "min": 256, "max": 3840, "step": 2}),
-                "height": ("INT", {"default": 1080, "min": 256, "max": 2160, "step": 2}),
-
-                # Background (v2 fallback)
-                "background_type": (BACKGROUND_TYPES, {"default": "transparent"}),
-                "background_color": ("STRING", {"multiline": False, "default": "#FFFFFF"}),
-
-                # Polling
-                "poll_interval": ("INT", {"default": 5, "min": 1, "max": 30, "step": 1}),
-                "max_poll_checks": ("INT", {"default": 120, "min": 10, "max": 1000, "step": 10}),
-
-                # Endpoint selection
-                "endpoint_mode": (ENDPOINT_MODES, {"default": "av4_with_fallback"}),
             },
         }
 
@@ -56,22 +34,12 @@ class HeyGenAvatarIV:
         api_key: str,
         image,
         audio,
-        video_title: str = "ComfyUI AV4 Video",
         custom_motion_prompt: str = "",
-        enhance_custom_motion_prompt: bool = True,
-        width: int = 1920,
-        height: int = 1080,
-        background_type: str = "transparent",
-        background_color: str = "#FFFFFF",
-        poll_interval: int = 5,
-        max_poll_checks: int = 120,
-        endpoint_mode: str = "av4_with_fallback",
     ):
-        # ── 1. Validate ─────────────────────────────────────────────────────
         if not api_key.strip():
             raise ValueError("[HeyGen] api_key is required")
 
-        # ── 2. Upload image ──────────────────────────────────────────────────
+        # ── 1. Upload image ──────────────────────────────────────────────────
         print("[HeyGen] Converting and uploading image...")
         png_bytes = image_tensor_to_png_bytes(image)
         img_resp = upload_asset(api_key, png_bytes, "image/png")
@@ -80,7 +48,7 @@ class HeyGenAvatarIV:
         image_url = img_resp.get("url", "")
         print(f"[HeyGen] Image uploaded — image_key={image_key}, id={image_asset_id}")
 
-        # ── 3. Upload audio ──────────────────────────────────────────────────
+        # ── 2. Upload audio ──────────────────────────────────────────────────
         print("[HeyGen] Converting and uploading audio...")
         audio_bytes, content_type, filename = audio_tensor_to_uploadable(audio)
         aud_resp = upload_asset(api_key, audio_bytes, content_type)
@@ -88,69 +56,50 @@ class HeyGenAvatarIV:
         audio_url = aud_resp.get("url", "")
         print(f"[HeyGen] Audio uploaded — id={audio_asset_id}")
 
-        # ── 4. Generate video ────────────────────────────────────────────────
+        # ── 3. Generate video (AV4 first, v2 fallback) ──────────────────────
         video_id = None
 
         # Try AV4 endpoint
-        if endpoint_mode in ("av4_with_fallback", "av4_only"):
-            av4_params = {
-                "image_key": image_key,
-                "video_title": video_title,
-                "audio_asset_id": audio_asset_id,
-            }
+        av4_params = {
+            "image_key": image_key,
+            "video_title": "ComfyUI AV4",
+            "audio_asset_id": audio_asset_id,
+        }
+        if custom_motion_prompt.strip():
+            av4_params["custom_motion_prompt"] = custom_motion_prompt
+            av4_params["enhance_custom_motion_prompt"] = True
 
-            if custom_motion_prompt.strip():
-                av4_params["custom_motion_prompt"] = custom_motion_prompt
-                av4_params["enhance_custom_motion_prompt"] = enhance_custom_motion_prompt
+        try:
+            video_id = generate_av4(api_key, av4_params)
+        except Exception as e:
+            print(f"[HeyGen] AV4 endpoint failed: {e}")
+            print("[HeyGen] Falling back to v2 endpoint...")
 
-            try:
-                video_id = generate_av4(api_key, av4_params)
-            except Exception as e:
-                if endpoint_mode == "av4_only":
-                    raise
-                print(f"[HeyGen] AV4 endpoint failed: {e}")
-                print("[HeyGen] Falling back to v2 endpoint...")
-
-        # Fallback to v2 endpoint
-        if video_id is None and endpoint_mode in ("av4_with_fallback", "v2_only"):
-            voice_config = {
-                "type": "audio",
-                "audio_asset_id": audio_asset_id,
-            }
-
-            bg = None
-            if background_type == "color":
-                bg = {"type": "color", "value": background_color}
-            elif background_type == "transparent":
-                bg = {"type": "transparent"}
-
+        # Fallback to v2
+        if video_id is None:
+            voice_config = {"type": "audio", "audio_asset_id": audio_asset_id}
             video_id = generate_v2(
                 api_key=api_key,
                 image_asset_id=image_asset_id,
                 image_url=image_url,
                 voice_config=voice_config,
-                dimension={"width": width, "height": height},
-                title=video_title,
-                background=bg,
+                dimension={"width": 1920, "height": 1080},
+                title="ComfyUI AV4",
+                background=None,
                 avatar_iv_motion_prompt=custom_motion_prompt,
-                enhance_motion_prompt=enhance_custom_motion_prompt,
+                enhance_motion_prompt=True,
             )
 
-        if video_id is None:
-            raise RuntimeError("[HeyGen] Failed to generate video with all attempted endpoints")
-
-        # ── 5. Poll for completion ───────────────────────────────────────────
-        print(f"[HeyGen] Polling video status (every {poll_interval}s, max {max_poll_checks} checks)...")
-        result = poll_video_status(api_key, video_id, poll_interval, max_poll_checks)
+        # ── 4. Poll for completion ───────────────────────────────────────────
+        print("[HeyGen] Waiting for video to render...")
+        result = poll_video_status(api_key, video_id, interval=5, max_checks=120)
         video_url_result = result.get("video_url", "")
 
         if not video_url_result:
             raise RuntimeError(f"[HeyGen] Video completed but no video_url returned. video_id={video_id}")
 
-        # ── 6. Download video ────────────────────────────────────────────────
+        # ── 5. Download and return ───────────────────────────────────────────
         local_path = download_video(video_url_result)
-
-        # ── 7. Return ────────────────────────────────────────────────────────
         video_output = _make_video_output(local_path)
         return (video_output, str(video_id), str(video_url_result))
 
