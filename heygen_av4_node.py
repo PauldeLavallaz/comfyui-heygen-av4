@@ -75,29 +75,12 @@ class HeyGenAvatarIV:
         audio_url = aud_resp.get("url", "")
         print(f"[HeyGen] Audio uploaded — id={audio_asset_id}")
 
-        # ── 3. Generate video (AV4 first, v2 fallback) ──────────────────────
+        # ── 3. Generate video (v2 first for dimension support, AV4 fallback) ─
         video_id = None
 
-        # Try AV4 endpoint
-        av4_params = {
-            "image_key": image_key,
-            "video_title": "ComfyUI AV4",
-            "audio_asset_id": audio_asset_id,
-            "dimension": {"width": img_w, "height": img_h},
-        }
-        if custom_motion_prompt.strip():
-            av4_params["custom_motion_prompt"] = custom_motion_prompt
-            av4_params["enhance_custom_motion_prompt"] = enhance_custom_motion_prompt
-
+        # Try v2 endpoint first — it respects the dimension parameter
+        voice_config = {"type": "audio", "audio_asset_id": audio_asset_id}
         try:
-            video_id = generate_av4(api_key, av4_params)
-        except Exception as e:
-            print(f"[HeyGen] AV4 endpoint failed: {e}")
-            print("[HeyGen] Falling back to v2 endpoint...")
-
-        # Fallback to v2
-        if video_id is None:
-            voice_config = {"type": "audio", "audio_asset_id": audio_asset_id}
             video_id = generate_v2(
                 api_key=api_key,
                 image_asset_id=image_asset_id,
@@ -109,6 +92,21 @@ class HeyGenAvatarIV:
                 avatar_iv_motion_prompt=custom_motion_prompt,
                 enhance_motion_prompt=enhance_custom_motion_prompt,
             )
+        except Exception as e:
+            print(f"[HeyGen] v2 endpoint failed: {e}")
+            print("[HeyGen] Falling back to AV4 endpoint...")
+
+        # Fallback to AV4
+        if video_id is None:
+            av4_params = {
+                "image_key": image_key,
+                "video_title": "ComfyUI AV4",
+                "audio_asset_id": audio_asset_id,
+            }
+            if custom_motion_prompt.strip():
+                av4_params["custom_motion_prompt"] = custom_motion_prompt
+                av4_params["enhance_custom_motion_prompt"] = enhance_custom_motion_prompt
+            video_id = generate_av4(api_key, av4_params)
 
         # ── 4. Poll for completion ───────────────────────────────────────────
         print("[HeyGen] Waiting for video to render...")
