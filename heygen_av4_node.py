@@ -6,18 +6,18 @@ Automatically detects the image aspect ratio for the output video.
 """
 
 from .media_utils import image_tensor_to_png_bytes, audio_tensor_to_uploadable, _make_video_output
-from .heygen_api import upload_asset, generate_av4, generate_v2, poll_video_status, download_video
+from .heygen_api import (
+    upload_asset, generate_av4, generate_v2, poll_video_status, download_video,
+    _compute_aspect_ratio, _snap_dimension,
+)
 
 
 def _get_image_dimensions(image_tensor) -> tuple:
-    """Extract (width, height) from IMAGE tensor [B, H, W, 3] and round to even."""
+    """Extract (width, height) from IMAGE tensor [B, H, W, 3]."""
     if image_tensor.ndim == 4:
         h, w = image_tensor.shape[1], image_tensor.shape[2]
     else:
         h, w = image_tensor.shape[0], image_tensor.shape[1]
-    # Round to nearest even number (required by most video codecs)
-    w = w if w % 2 == 0 else w + 1
-    h = h if h % 2 == 0 else h + 1
     return int(w), int(h)
 
 
@@ -54,9 +54,11 @@ class HeyGenAvatarIV:
         if not api_key.strip():
             raise ValueError("[HeyGen] api_key is required")
 
-        # ── Detect image dimensions ──────────────────────────────────────────
+        # ── Detect image dimensions and compute aspect ratio ─────────────────
         img_w, img_h = _get_image_dimensions(image)
-        print(f"[HeyGen] Image dimensions: {img_w}x{img_h}")
+        aspect_ratio = _compute_aspect_ratio(img_w, img_h)
+        dimension = _snap_dimension(img_w, img_h)
+        print(f"[HeyGen] Image: {img_w}x{img_h} → aspect_ratio={aspect_ratio}, dimension={dimension}")
 
         # ── 1. Upload image ──────────────────────────────────────────────────
         print("[HeyGen] Converting and uploading image...")
@@ -65,7 +67,6 @@ class HeyGenAvatarIV:
         image_key = img_resp.get("image_key", "")
         image_asset_id = img_resp.get("id", "")
         image_url = img_resp.get("url", "")
-        print(f"[HeyGen] Image uploaded — image_key={image_key}, id={image_asset_id}")
 
         # ── 2. Upload audio ──────────────────────────────────────────────────
         print("[HeyGen] Converting and uploading audio...")
@@ -73,40 +74,54 @@ class HeyGenAvatarIV:
         aud_resp = upload_asset(api_key, audio_bytes, content_type)
         audio_asset_id = aud_resp.get("id", "")
         audio_url = aud_resp.get("url", "")
-        print(f"[HeyGen] Audio uploaded — id={audio_asset_id}")
 
-        # ── 3. Generate video (v2 first for dimension support, AV4 fallback) ─
+        # ── 3. Generate video ────────────────────────────────────────────────
         video_id = None
+        used_endpoint = None
 
-        # Try v2 endpoint first — it respects the dimension parameter
-        voice_config = {"type": "audio", "audio_asset_id": audio_asset_id}
+        # ── Try AV4 endpoint first (correct for image+audio, supports aspect_ratio) ──
+        print(f"[HeyGen] Trying AV4 endpoint with aspect_ratio={aspect_ratio}...")
+        av4_params = {
+            "image_key": image_key,
+            "video_title": "ComfyUI AV4",
+            "audio_asset_id": audio_asset_id,
+            "aspect_ratio": aspect_ratio,
+        }
+        if custom_motion_prompt.strip():
+            av4_params["custom_motion_prompt"] = custom_motion_prompt
+            av4_params["enhance_custom_motion_prompt"] = enhance_custom_motion_prompt
+
         try:
-            video_id = generate_v2(
-                api_key=api_key,
-                image_asset_id=image_asset_id,
-                image_url=image_url,
-                voice_config=voice_config,
-                dimension={"width": img_w, "height": img_h},
-                title="ComfyUI AV4",
-                background=None,
-                avatar_iv_motion_prompt=custom_motion_prompt,
-                enhance_motion_prompt=enhance_custom_motion_prompt,
-            )
-        except Exception as e:
-            print(f"[HeyGen] v2 endpoint failed: {e}")
-            print("[HeyGen] Falling back to AV4 endpoint...")
-
-        # Fallback to AV4
-        if video_id is None:
-            av4_params = {
-                "image_key": image_key,
-                "video_title": "ComfyUI AV4",
-                "audio_asset_id": audio_asset_id,
-            }
-            if custom_motion_prompt.strip():
-                av4_params["custom_motion_prompt"] = custom_motion_prompt
-                av4_params["enhance_custom_motion_prompt"] = enhance_custom_motion_prompt
             video_id = generate_av4(api_key, av4_params)
+            used_endpoint = "av4"
+        except Exception as e:
+            print(f"[HeyGen] AV4 endpoint FAILED: {e}")
+
+        # ── Fallback: v2 endpoint ────────────────────────────────────────────
+        if video_id is None:
+            print(f"[HeyGen] Trying v2 endpoint with dimension={dimension}, aspect_ratio={aspect_ratio}...")
+            voice_config = {"type": "audio", "audio_asset_id": audio_asset_id}
+            try:
+                video_id = generate_v2(
+                    api_key=api_key,
+                    image_asset_id=image_asset_id,
+                    image_url=image_url,
+                    voice_config=voice_config,
+                    dimension=dimension,
+                    aspect_ratio=aspect_ratio,
+                    title="ComfyUI AV4",
+                    background=None,
+                    avatar_iv_motion_prompt=custom_motion_prompt,
+                    enhance_motion_prompt=enhance_custom_motion_prompt,
+                )
+                used_endpoint = "v2"
+            except Exception as e:
+                print(f"[HeyGen] v2 endpoint FAILED: {e}")
+
+        if video_id is None:
+            raise RuntimeError("[HeyGen] Both AV4 and v2 endpoints failed. Check the logs above for details.")
+
+        print(f"[HeyGen] Video submitted via {used_endpoint}: {video_id}")
 
         # ── 4. Poll for completion ───────────────────────────────────────────
         print("[HeyGen] Waiting for video to render...")

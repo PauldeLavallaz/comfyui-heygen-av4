@@ -1,9 +1,10 @@
 """
 HeyGen API client for Avatar IV video generation.
-Handles: asset upload, AV4 generation, v2 generation (fallback), status polling, video download.
+Handles: asset upload, AV4 generation, v2 generation, status polling, video download.
 """
 
 import json
+import math
 import os
 import time
 import requests
@@ -24,13 +25,38 @@ def _headers(api_key: str, content_type: str = "application/json") -> dict:
     }
 
 
+def _compute_aspect_ratio(w: int, h: int) -> str:
+    """Compute the closest standard aspect ratio string for HeyGen API."""
+    ratio = w / h
+    if ratio > 1.2:
+        return "16:9"
+    elif ratio < 0.83:
+        return "9:16"
+    else:
+        return "1:1"
+
+
+def _snap_dimension(w: int, h: int) -> dict:
+    """Snap dimensions to standard resolutions HeyGen accepts.
+    HeyGen works best with standard resolutions like 1920x1080, 1080x1920, 1080x1080.
+    """
+    ratio = w / h
+
+    if ratio > 1.2:
+        # Landscape
+        return {"width": 1920, "height": 1080}
+    elif ratio < 0.83:
+        # Portrait
+        return {"width": 1080, "height": 1920}
+    else:
+        # Square
+        return {"width": 1080, "height": 1080}
+
+
 # ─── Asset Upload ────────────────────────────────────────────────────────────
 
 def upload_asset(api_key: str, data: bytes, content_type: str) -> dict:
-    """Upload binary data to HeyGen. Returns the response 'data' dict.
-    For images: data["image_key"] is needed by AV4 endpoint.
-    For audio: data["id"] is the audio_asset_id.
-    """
+    """Upload binary data to HeyGen. Returns the response 'data' dict."""
     resp = requests.post(
         UPLOAD_URL,
         headers=_headers(api_key, content_type),
@@ -41,23 +67,27 @@ def upload_asset(api_key: str, data: bytes, content_type: str) -> dict:
     body = resp.json()
     if body.get("code") != 100:
         raise RuntimeError(f"[HeyGen] Upload failed: {json.dumps(body)}")
-    return body.get("data", {})
+    result = body.get("data", {})
+    print(f"[HeyGen] Upload response: id={result.get('id')}, image_key={result.get('image_key')}, url={result.get('url', '')[:80]}")
+    return result
 
 
 # ─── AV4 Video Generation ───────────────────────────────────────────────────
 
 def generate_av4(api_key: str, params: dict) -> str:
     """Call the dedicated Avatar IV endpoint. Returns video_id."""
+    print(f"[HeyGen] AV4 request body: {json.dumps(params, indent=2)}")
     resp = requests.post(
         AV4_GENERATE_URL,
         headers=_headers(api_key),
         json=params,
         timeout=60,
     )
+    print(f"[HeyGen] AV4 response status: {resp.status_code}")
+    print(f"[HeyGen] AV4 response body: {resp.text[:500]}")
     resp.raise_for_status()
     body = resp.json()
 
-    # Extract video_id from response
     video_id = None
     if isinstance(body.get("data"), dict):
         video_id = body["data"].get("video_id")
@@ -67,7 +97,7 @@ def generate_av4(api_key: str, params: dict) -> str:
     return video_id
 
 
-# ─── V2 Video Generation (fallback) ─────────────────────────────────────────
+# ─── V2 Video Generation ────────────────────────────────────────────────────
 
 def generate_v2(
     api_key: str,
@@ -75,6 +105,7 @@ def generate_v2(
     image_url: str,
     voice_config: dict,
     dimension: dict,
+    aspect_ratio: str,
     title: str = "",
     background: dict | None = None,
     avatar_iv_motion_prompt: str = "",
@@ -102,16 +133,20 @@ def generate_v2(
     payload = {
         "video_inputs": [scene],
         "dimension": dimension,
+        "aspect_ratio": aspect_ratio,
     }
     if title:
         payload["title"] = title
 
+    print(f"[HeyGen] v2 request body: {json.dumps(payload, indent=2)}")
     resp = requests.post(
         V2_GENERATE_URL,
         headers=_headers(api_key),
         json=payload,
         timeout=60,
     )
+    print(f"[HeyGen] v2 response status: {resp.status_code}")
+    print(f"[HeyGen] v2 response body: {resp.text[:500]}")
     resp.raise_for_status()
     body = resp.json()
 
